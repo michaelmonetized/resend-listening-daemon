@@ -8,16 +8,32 @@ set -euo pipefail
 # Ensure bun and resend CLI are in PATH (for multi-machine compatibility)
 export PATH="$HOME/.bun/bin:$PATH"
 
-# Get RESEND_API_KEY from environment (set in parent shell or ~/.zshrc)
-# If not set, try to get it from grep in ~/.zshrc
-if [[ -z "${RESEND_API_KEY:-}" ]] && [[ -f "$HOME/.zshrc" ]]; then
-  RESEND_API_KEY_LINE=$(grep "^export RESEND_API_KEY=" "$HOME/.zshrc" | head -1 || true)
-  if [[ -n "$RESEND_API_KEY_LINE" ]]; then
-    eval "$RESEND_API_KEY_LINE"
+# Extract RESEND_API_KEY from multiple sources (in priority order):
+# 1. Already set in environment
+# 2. In ~/.zshrc
+# 3. In resend CLI's credentials file (~/.config/resend/credentials.json)
+
+if [[ -z "${RESEND_API_KEY:-}" ]]; then
+  # Try to get from ~/.zshrc
+  if [[ -f "$HOME/.zshrc" ]]; then
+    ZSHRC_KEY=$(grep "^export RESEND_API_KEY=" "$HOME/.zshrc" 2>/dev/null | sed 's/export RESEND_API_KEY="\(.*\)"/\1/' | head -1 || true)
+    [[ -n "$ZSHRC_KEY" ]] && RESEND_API_KEY="$ZSHRC_KEY"
   fi
 fi
 
+if [[ -z "${RESEND_API_KEY:-}" ]]; then
+  # Try to get from resend CLI's credentials file
+  if [[ -f "$HOME/.config/resend/credentials.json" ]]; then
+    CRED_KEY=$(grep -o '"api_key"\s*:\s*"[^"]*"' "$HOME/.config/resend/credentials.json" | sed 's/.*"\([^"]*\)".*/\1/' | head -1 || true)
+    [[ -n "$CRED_KEY" ]] && RESEND_API_KEY="$CRED_KEY"
+  fi
+fi
+
+# Export the key so it's available to subprocesses
 export RESEND_API_KEY="${RESEND_API_KEY:-}"
+
+# Log if key is missing (but don't fail - daemon will report the error)
+[[ -z "${RESEND_API_KEY}" ]] && echo "[$(date +'%Y-%m-%d %H:%M:%S')] WARNING: RESEND_API_KEY not found in environment, ~/.zshrc, or ~/.config/resend/credentials.json" >&2 || true
 
 # Configuration
 INSTALL_PREFIX="${INSTALL_PREFIX:-$HOME/.local/bin/resendld}"
