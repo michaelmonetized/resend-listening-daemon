@@ -71,6 +71,7 @@ async function startListening() {
   // Poll every 5 seconds
   setInterval(async () => {
     try {
+      console.log(`[C1] Polling... (timestamp: ${new Date().toISOString()})`);
       // Use resend CLI directly — ensure PATH is set in shell
       // bun exec inherits PATH, so if ~/.zshrc has PATH export, this works
       const output = execSync(`resend emails receiving list --json`, {
@@ -192,3 +193,6 @@ startListening().catch((err) => {
   console.error("[C1] Fatal:", err);
   process.exit(1);
 });
+
+// Keep process alive forever
+setInterval(() => {}, 1000);
