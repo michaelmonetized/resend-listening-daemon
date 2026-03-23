@@ -71,15 +71,18 @@ async function startListening() {
   // Poll every 5 seconds
   setInterval(async () => {
     try {
-      // Find resend CLI path (multi-machine support)
-      const resendBin = (() => {
-        if (process.env.RESEND_BIN) return process.env.RESEND_BIN;
-        const homeDir = process.env.HOME || "";
-        if (homeDir.includes("/home/")) return "/home/michael/.bun/bin/resend";
-        return "/Users/michael/.bun/bin/resend";
+      // Build resend CLI command (multi-machine support)
+      const homeDir = process.env.HOME || "";
+      const resendCmd = (() => {
+        // Try direct binary first
+        if (homeDir.includes("/home/")) {
+          return "/home/michael/.bun/install/global/node_modules/resend-cli/dist/cli.cjs";
+        }
+        return "/Users/michael/.bun/install/global/node_modules/resend-cli/dist/cli.cjs";
       })();
       
-      const output = execSync(`${resendBin} emails receiving list --json`, {
+      // Use node to run resend-cli since bun exec has PATH issues
+      const output = execSync(`node ${resendCmd} emails receiving list --json`, {
         encoding: "utf-8",
       });
       const response = JSON.parse(output);
