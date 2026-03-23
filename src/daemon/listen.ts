@@ -72,14 +72,10 @@ async function startListening() {
   setInterval(async () => {
     try {
       console.log(`[C1] Polling... (timestamp: ${new Date().toISOString()})`);
-      // Use resend CLI directly — ensure PATH is set in shell
-      // bun exec inherits PATH, so if ~/.zshrc has PATH export, this works
-      const output = execSync(`resend emails receiving list --json`, {
-        env: {
-          ...process.env,
-          // Add bun bin to PATH for systems that don't have ~/.zshrc sourced
-          PATH: `${process.env.HOME}/.bun/bin:${process.env.PATH}`,
-        },
+      // Use resend CLI with explicit PATH setup via sh
+      // For better cross-machine compatibility, use sh -c to ensure PATH is set
+      const output = execSync(`sh -c 'export PATH="$HOME/.bun/bin:$PATH" && resend emails receiving list --json'`, {
+        env: process.env,
         encoding: "utf-8",
       });
       const response = JSON.parse(output);
