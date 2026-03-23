@@ -72,9 +72,19 @@ async function startListening() {
   setInterval(async () => {
     try {
       console.log(`[C1] Polling... (timestamp: ${new Date().toISOString()})`);
-      // Use resend CLI with explicit PATH and API key setup via sh
-      // Pass RESEND_API_KEY explicitly to ensure it's available in subprocess
-      const output = execSync(`sh -c 'export PATH="$HOME/.bun/bin:$PATH" RESEND_API_KEY="${process.env.RESEND_API_KEY || ''}" && resend emails receiving list --json'`, {
+      // Use resend CLI directly with full PATH
+      // Try: (1) ~/.bun/bin/resend (2) system resend (3) give up with error
+      let resendPath = "resend";
+      const bunResendPath = `${process.env.HOME}/.bun/bin/resend`;
+      try {
+        // Check if bun version exists
+        const fs = require("fs");
+        if (fs.existsSync(bunResendPath)) {
+          resendPath = bunResendPath;
+        }
+      } catch (e) {}
+      
+      const output = execSync(`${resendPath} emails receiving list --json`, {
         env: process.env,
         encoding: "utf-8",
       });
