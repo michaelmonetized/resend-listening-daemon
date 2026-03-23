@@ -105,7 +105,11 @@ async function startListening() {
         console.log(`[C1] New email: ${email.from} → ${recipients.join(", ")} - ${email.subject}`);
 
         try {
-          const fullOutput = execSync(`${resendBin} emails receiving get ${email.id} --json`, {
+          const fullOutput = execSync(`resend emails receiving get ${email.id} --json`, {
+            env: {
+              ...process.env,
+              PATH: `${process.env.HOME}/.bun/bin:${process.env.PATH}`,
+            },
             encoding: "utf-8",
           });
           const fullEmail = JSON.parse(fullOutput);
