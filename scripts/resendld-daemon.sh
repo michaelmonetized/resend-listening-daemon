@@ -1,0 +1,322 @@
+#!/bin/zsh
+# resendld - Resend Email Listening Daemon
+# Monitors configured Resend email boxes and delivers messages to OpenClaw gateway
+# Usage: resendld [start|stop|restart|status|logs|box add|box list|box remove]
+
+set -euo pipefail
+
+# Ensure bun and resend CLI are in PATH (for multi-machine compatibility)
+export PATH="$HOME/.bun/bin:$PATH"
+
+# Extract RESEND_API_KEY from multiple sources (in priority order):
+# 1. Already set in environment
+# 2. In ~/.zshrc
+# 3. In resend CLI's credentials file (~/.config/resend/credentials.json)
+
+if [[ -z "${RESEND_API_KEY:-}" ]]; then
+  # Try to get from ~/.zshrc
+  if [[ -f "$HOME/.zshrc" ]]; then
+    ZSHRC_KEY=$(grep "^export RESEND_API_KEY=" "$HOME/.zshrc" 2>/dev/null | sed 's/export RESEND_API_KEY="\(.*\)"/\1/' | head -1 || true)
+    [[ -n "$ZSHRC_KEY" ]] && RESEND_API_KEY="$ZSHRC_KEY"
+  fi
+fi
+
+if [[ -z "${RESEND_API_KEY:-}" ]]; then
+  # Try to get from resend CLI's credentials file
+  if [[ -f "$HOME/.config/resend/credentials.json" ]]; then
+    CRED_KEY=$(grep -o '"api_key"\s*:\s*"[^"]*"' "$HOME/.config/resend/credentials.json" | sed 's/.*"\([^"]*\)".*/\1/' | head -1 || true)
+    [[ -n "$CRED_KEY" ]] && RESEND_API_KEY="$CRED_KEY"
+  fi
+fi
+
+# Export the key so it's available to subprocesses
+export RESEND_API_KEY="${RESEND_API_KEY:-}"
+
+# Log if key is missing (but don't fail - daemon will report the error)
+[[ -z "${RESEND_API_KEY}" ]] && echo "[$(date +'%Y-%m-%d %H:%M:%S')] WARNING: RESEND_API_KEY not found in environment, ~/.zshrc, or ~/.config/resend/credentials.json" >&2 || true
+
+# Configuration
+INSTALL_PREFIX="${INSTALL_PREFIX:-$HOME/.local/bin/resendld}"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/resendld"
+MAIL_DIR="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace}/mail/inbox"
+LOG_DIR="$INSTALL_PREFIX/logs"
+PID_FILE="$INSTALL_PREFIX/.resendld.pid"
+CONVEX_DIR="$INSTALL_PREFIX/web"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+# Ensure directories exist
+mkdir -p "$CONFIG_DIR" "$MAIL_DIR" "$LOG_DIR" "$INSTALL_PREFIX"
+
+# Initialize config if missing
+init_config() {
+  if [[ ! -f "$CONFIG_DIR/boxes.json" ]]; then
+    cat > "$CONFIG_DIR/boxes.json" << 'EOF'
+{
+  "boxes": [
+    {
+      "email": "user@domain.tld",
+      "isActive": true,
+      "lastSync": null
+    }
+  ]
+}
+EOF
+    echo "✓ Initialized $CONFIG_DIR/boxes.json"
+  fi
+}
+
+# Check if daemon is running
+is_running() {
+  [[ -f "$PID_FILE" ]] && kill -0 $(cat "$PID_FILE") 2>/dev/null
+}
+
+# Kill all orphaned resendld processes
+cleanup_zombies() {
+  pkill -f "bun.*listen.ts" 2>/dev/null || true
+  pkill -f "node.*listen.js" 2>/dev/null || true
+  sleep 1
+}
+
+# Start the daemon
+start_daemon() {
+  # Always cleanup old processes first
+  cleanup_zombies
+  
+  # Remove stale PID file if process is dead
+  if [[ -f "$PID_FILE" ]]; then
+    PID=$(cat "$PID_FILE")
+    if ! kill -0 $PID 2>/dev/null; then
+      rm -f "$PID_FILE"
+    fi
+  fi
+  
+  if is_running; then
+    echo -e "${YELLOW}resendld is already running (PID: $(cat "$PID_FILE"))${NC}"
+    return 0
+  fi
+
+  init_config
+
+  echo "Starting resendld daemon..."
+
+  # Trap signals to cleanup child processes
+  trap 'cleanup_processes' EXIT TERM INT
+  
+  cleanup_processes() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] Shutting down..." >> "$LOG_DIR/daemon.log"
+    [[ -f "$LOG_DIR/.convex.pid" ]] && kill $(cat "$LOG_DIR/.convex.pid") 2>/dev/null || true
+    [[ -f "$LOG_DIR/.web.pid" ]] && kill $(cat "$LOG_DIR/.web.pid") 2>/dev/null || true
+    [[ -f "$LOG_DIR/.listen.pid" ]] && kill $(cat "$LOG_DIR/.listen.pid") 2>/dev/null || true
+  }
+
+  # TODO: Convex dev server (requires cloud setup or local auth workaround)
+  # (
+  #   cd "$CONVEX_DIR"
+  #   npx convex dev >> "$LOG_DIR/convex.log" 2>&1
+  # ) &
+  # echo $! > "$LOG_DIR/.convex.pid"
+
+  # TODO: Web server (TanStack Start dev)
+  # (
+  #   cd "$CONVEX_DIR"
+  #   bun run dev >> "$LOG_DIR/web.log" 2>&1
+  # ) &
+  # echo $! > "$LOG_DIR/.web.pid"
+
+  # Start listening loop with auto-restart
+  (
+    # Ensure RESEND_API_KEY is exported
+    [[ -z "${RESEND_API_KEY:-}" ]] && echo "[$(date +'%Y-%m-%d %H:%M:%S')] WARNING: RESEND_API_KEY not set" >> "$LOG_DIR/daemon.log"
+    export RESEND_API_KEY="${RESEND_API_KEY:-}"
+    
+    while true; do
+      echo "[$(date +'%Y-%m-%d %H:%M:%S')] Starting listening loop..." >> "$LOG_DIR/daemon.log"
+      
+      # Run the TypeScript listening handler with RESEND_API_KEY in environment
+      if command -v bun &> /dev/null; then
+        bun "$INSTALL_PREFIX/src/daemon/listen.ts" >> "$LOG_DIR/daemon.log" 2>&1
+      else
+        node "$INSTALL_PREFIX/src/daemon/listen.js" >> "$LOG_DIR/daemon.log" 2>&1
+      fi
+      
+      EXIT_CODE=$?
+      if [[ $EXIT_CODE -ne 0 ]]; then
+        echo "[$(date +'%Y-%m-%d %H:%M:%S')] Listening loop exited with code $EXIT_CODE. Restarting in 5s..." >> "$LOG_DIR/daemon.log"
+        sleep 5
+      fi
+    done
+  ) &
+  LISTEN_PID=$!
+  echo $LISTEN_PID > "$LOG_DIR/.listen.pid"
+  echo "[$(date +'%Y-%m-%d %H:%M:%S')] Listening loop started (PID: $LISTEN_PID)" >> "$LOG_DIR/daemon.log"
+
+  DAEMON_PID=$LISTEN_PID
+  echo $DAEMON_PID > "$PID_FILE"
+
+  echo -e "${GREEN}✓ resendld started (PID: $DAEMON_PID)${NC}"
+  echo "  Daemon logs: $LOG_DIR/daemon.log"
+  echo "  Convex logs: $LOG_DIR/convex.log"
+  echo "  Web logs:    $LOG_DIR/web.log"
+  echo "  Web UI:      https://resendld.localhost"
+}
+
+# Stop the daemon
+stop_daemon() {
+  echo "Stopping resendld..."
+  
+  # Kill main daemon
+  if [[ -f "$PID_FILE" ]]; then
+    DAEMON_PID=$(cat "$PID_FILE")
+    kill $DAEMON_PID 2>/dev/null || true
+  fi
+  
+  # Kill all orphaned processes
+  cleanup_zombies
+  
+  # Stop child processes
+  [[ -f "$LOG_DIR/.convex.pid" ]] && kill $(cat "$LOG_DIR/.convex.pid") 2>/dev/null || true
+  [[ -f "$LOG_DIR/.web.pid" ]] && kill $(cat "$LOG_DIR/.web.pid") 2>/dev/null || true
+  
+  rm -f "$PID_FILE"
+  
+  echo -e "${GREEN}✓ resendld stopped${NC}"
+}
+
+# Restart the daemon
+restart_daemon() {
+  stop_daemon
+  sleep 1
+  start_daemon
+}
+
+# Show daemon status
+status_daemon() {
+  if is_running; then
+    PID=$(cat "$PID_FILE")
+    echo -e "${GREEN}✓ resendld is running (PID: $PID)${NC}"
+    echo ""
+    echo "Configuration: $CONFIG_DIR/boxes.json"
+    echo "Mail storage:  $MAIL_DIR"
+    echo "Logs:          $LOG_DIR"
+    echo "Web UI:        https://resendld.localhost"
+  else
+    echo -e "${RED}✗ resendld is not running${NC}"
+  fi
+}
+
+# Show daemon logs
+show_logs() {
+  echo "=== Daemon Logs ==="
+  tail -n 50 "$LOG_DIR/daemon.log" 2>/dev/null || echo "(no logs yet)"
+  echo ""
+  echo "=== Convex Logs ==="
+  tail -n 20 "$LOG_DIR/convex.log" 2>/dev/null || echo "(no logs yet)"
+  echo ""
+  echo "=== Web Logs ==="
+  tail -n 20 "$LOG_DIR/web.log" 2>/dev/null || echo "(no logs yet)"
+}
+
+# Box management commands
+box_add() {
+  local email=$1
+  init_config
+  
+  # Use jq to add new box to boxes.json
+  if command -v jq &> /dev/null; then
+    jq ".boxes += [{\"email\": \"$email\", \"isActive\": true, \"lastSync\": null}]" \
+      "$CONFIG_DIR/boxes.json" > "$CONFIG_DIR/boxes.json.tmp" && \
+      mv "$CONFIG_DIR/boxes.json.tmp" "$CONFIG_DIR/boxes.json"
+    echo -e "${GREEN}✓ Added box: $email${NC}"
+  else
+    echo -e "${RED}✗ jq required for box management${NC}"
+    return 1
+  fi
+}
+
+box_list() {
+  init_config
+  if command -v jq &> /dev/null; then
+    echo "Configured email boxes:"
+    jq -r '.boxes[] | "\(.email) (\(.isActive | if . then "active" else "inactive" end))"' \
+      "$CONFIG_DIR/boxes.json"
+  else
+    echo -e "${RED}✗ jq required for box management${NC}"
+    return 1
+  fi
+}
+
+box_remove() {
+  local email=$1
+  init_config
+  
+  if command -v jq &> /dev/null; then
+    jq ".boxes |= map(select(.email != \"$email\"))" \
+      "$CONFIG_DIR/boxes.json" > "$CONFIG_DIR/boxes.json.tmp" && \
+      mv "$CONFIG_DIR/boxes.json.tmp" "$CONFIG_DIR/boxes.json"
+    echo -e "${GREEN}✓ Removed box: $email${NC}"
+  else
+    echo -e "${RED}✗ jq required for box management${NC}"
+    return 1
+  fi
+}
+
+# Main entry point
+main() {
+  case "${1:-status}" in
+    start)
+      start_daemon
+      ;;
+    stop)
+      stop_daemon
+      ;;
+    restart)
+      restart_daemon
+      ;;
+    status)
+      status_daemon
+      ;;
+    logs)
+      show_logs
+      ;;
+    box)
+      case "${2:-}" in
+        add)
+          box_add "${3:?Email address required}"
+          ;;
+        list)
+          box_list
+          ;;
+        remove)
+          box_remove "${3:?Email address required}"
+          ;;
+        *)
+          echo "Usage: resendld box [add|list|remove] [email]"
+          return 1
+          ;;
+      esac
+      ;;
+    *)
+      echo "resendld - Resend Email Listening Daemon"
+      echo ""
+      echo "Usage: resendld [COMMAND]"
+      echo ""
+      echo "Commands:"
+      echo "  start          Start the daemon"
+      echo "  stop           Stop the daemon"
+      echo "  restart        Restart the daemon"
+      echo "  status         Show daemon status"
+      echo "  logs           Show recent logs"
+      echo "  box add EMAIL  Add email box to listen to"
+      echo "  box list       List configured boxes"
+      echo "  box remove EMAIL  Remove email box"
+      return 1
+      ;;
+  esac
+}
+
+main "$@"
