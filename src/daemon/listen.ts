@@ -71,18 +71,14 @@ async function startListening() {
   // Poll every 5 seconds
   setInterval(async () => {
     try {
-      // Build resend CLI command (multi-machine support)
-      const homeDir = process.env.HOME || "";
-      const resendCmd = (() => {
-        // Try direct binary first
-        if (homeDir.includes("/home/")) {
-          return "/home/michael/.bun/install/global/node_modules/resend-cli/dist/cli.cjs";
-        }
-        return "/Users/michael/.bun/install/global/node_modules/resend-cli/dist/cli.cjs";
-      })();
-      
-      // Use node to run resend-cli since bun exec has PATH issues
-      const output = execSync(`node ${resendCmd} emails receiving list --json`, {
+      // Use resend CLI directly — ensure PATH is set in shell
+      // bun exec inherits PATH, so if ~/.zshrc has PATH export, this works
+      const output = execSync(`resend emails receiving list --json`, {
+        env: {
+          ...process.env,
+          // Add bun bin to PATH for systems that don't have ~/.zshrc sourced
+          PATH: `${process.env.HOME}/.bun/bin:${process.env.PATH}`,
+        },
         encoding: "utf-8",
       });
       const response = JSON.parse(output);
