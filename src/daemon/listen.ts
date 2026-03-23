@@ -130,40 +130,39 @@ async function startListening() {
             // Convex errors are non-fatal
           }
 
-          // Parse and relay instructions to main OpenClaw session
+          // Deliver full email content + subject to main session as direct instructions
+          // Fire in background (non-blocking) so daemon keeps polling
           try {
-            const instructions = parseInstructions(parsedEmail.body);
-            if (instructions.length > 0) {
-              console.log(`[C4] Found ${instructions.length} instruction(s) in email`);
-              for (const instruction of instructions) {
-                try {
-                  // Fire systemEvent to main session via OpenClaw cron API
-                  const CURRENT_EPOCH = Math.floor(Date.now() / 1000);
-                  const FIRE_EPOCH = CURRENT_EPOCH + 10;
-                  const FIRE_TIME = new Date(FIRE_EPOCH * 1000).toISOString();
-                  
-                  const prompt = `Email instruction from ${parsedEmail.from}:\n\n${instruction.command}${instruction.project ? ` ${instruction.project}` : ""}\n\nSubject: ${parsedEmail.subject}`;
-                  
-                  execSync(
-                    `openclaw cron add --name "email-${parsedEmail.messageId.slice(0, 8)}" --at "${FIRE_TIME}" --system-event ${JSON.stringify(prompt)} --session main --delete-after-run 2>&1`,
-                    { stdio: "pipe", timeout: 10000 }
-                  );
-                  console.log(`[C4] ✓ Relayed to main session: ${instruction.command}`);
+            const CURRENT_EPOCH = Math.floor(Date.now() / 1000);
+            const FIRE_EPOCH = CURRENT_EPOCH + 10;
+            const FIRE_TIME = new Date(FIRE_EPOCH * 1000).toISOString();
+            
+            const prompt = `📧 ${parsedEmail.subject}\n\nFrom: ${parsedEmail.from}\n\n${parsedEmail.body}`;
+            
+            // Fire cron add in background (don't wait for it)
+            const child = require("child_process").spawn("openclaw", [
+              "cron", "add",
+              "--name", `email-${parsedEmail.messageId.slice(0, 8)}`,
+              "--at", FIRE_TIME,
+              "--system-event", prompt,
+              "--session", "main",
+              "--delete-after-run"
+            ], { stdio: "ignore" });
+            
+            child.unref(); // Let it run independently
+            console.log(`[C4] ✓ Queued to main session: ${parsedEmail.subject}`);
 
-                  // Also report to Telegram
-                  const telegramMsg = `📧 Instruction from ${parsedEmail.from}:\n${instruction.command}${instruction.project ? ` ${instruction.project}` : ""}`;
-                  execSync(
-                    `/Users/michael/.bun/bin/openclaw message send --channel telegram --target -1003740074376 --message ${JSON.stringify(telegramMsg)}`,
-                    { stdio: "pipe", timeout: 5000 }
-                  );
-                } catch (execErr: any) {
-                  console.error(`[C4] Relay error:`, execErr.message || execErr);
-                }
-              }
-            }
-          } catch (err) {
-            // Instruction parsing errors are non-fatal
-            console.error(`[C4] Instruction parsing error:`, err);
+            // Also report to Telegram (non-blocking)
+            const telegramChild = require("child_process").spawn("openclaw", [
+              "message", "send",
+              "--channel", "telegram",
+              "--target", "-1003740074376",
+              "--message", `📧 ${parsedEmail.subject}\n\nFrom: ${parsedEmail.from}`
+            ], { stdio: "ignore" });
+            
+            telegramChild.unref();
+          } catch (err: any) {
+            console.error(`[C4] Delivery error:`, err.message || err);
           }
 
           // Deliver to gateway
