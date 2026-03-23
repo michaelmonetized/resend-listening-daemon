@@ -1,0 +1,86 @@
+# CC7: Caddy Configuration for resendld
+#
+# Routes resendld.localhost:443 → localhost:3000 (web server)
+# Auto-generates self-signed SSL cert for localhost
+#
+# Usage:
+#   caddy run --config ./scripts/caddy/Caddyfile
+#   # or
+#   caddy start --config ./scripts/caddy/Caddyfile
+#
+# Trust cert on macOS:
+#   caddy trust
+#
+# Test:
+#   curl -k https://resendld.localhost
+
+{
+	# Global options
+	admin off
+	auto_https disable_certs
+
+	# Local development - use internal CA
+	local_certs
+}
+
+# Main site - local SSL
+resendld.localhost {
+	# Use internal/self-signed certificate
+	tls internal
+
+	# Enable compression
+	encode gzip zstd
+
+	# Security headers
+	header {
+		# Remove server identification
+		-Server
+
+		# Basic security headers for local dev
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	# Serve attachments from local filesystem
+	# Route: /attachments/{from}/{subject}/{filename}
+	handle /attachments/* {
+		root * {$HOME}/.openclaw/workspace/mail/inbox
+		file_server {
+			browse
+		}
+	}
+
+	# API endpoint for attachment downloads
+	handle /api/attachments/download* {
+		# Rewrite to serve file from query param
+		# In production, this would be handled by the Node server
+		# For now, proxy to the web server
+		reverse_proxy localhost:3000
+	}
+
+	# Proxy all other requests to TanStack Start server
+	handle {
+		reverse_proxy localhost:3000 {
+			# Pass through WebSocket for HMR
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	# Logging
+	log {
+		output file {$HOME}/.local/bin/resendld/logs/caddy.log {
+			roll_size 10mb
+			roll_keep 5
+		}
+		format console
+	}
+}
+
+# HTTP redirect to HTTPS
+http://resendld.localhost {
+	redir https://resendld.localhost{uri} permanent
+}

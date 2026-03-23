@@ -1,0 +1,19 @@
+{
+  "boxes": [
+    {
+      "email": "hello@mycompany.tld",
+      "isActive": true,
+      "lastSync": "2026-03-23T15:30:00Z"
+    },
+    {
+      "email": "support@mycompany.tld",
+      "isActive": true,
+      "lastSync": "2026-03-23T15:35:00Z"
+    },
+    {
+      "email": "archived@mycompany.tld",
+      "isActive": false,
+      "lastSync": null
+    }
+  ]
+}
