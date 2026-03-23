@@ -115,7 +115,7 @@ async function startListening() {
             subject: (email.subject || "no subject").toString(),
             body: (email.text || "").toString(),
             bodyHtml: email.html ? email.html.toString() : null,
-            attachments: fullEmail.attachments || [],
+            attachments: email.attachments || [],
             date: (fullEmail.created_at || new Date().toISOString()).toString(),
             messageId: fullEmail.id || "unknown",
           };
