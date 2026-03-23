@@ -56,14 +56,31 @@ start_daemon() {
 
   echo "Starting resendld daemon..."
 
-  # Start Convex dev server in background
-  (
-    cd "$CONVEX_DIR"
-    npx convex dev --cwd "$CONVEX_DIR" >> "$LOG_DIR/convex.log" 2>&1 &
-    echo $! > "$LOG_DIR/.convex.pid"
-  ) &
+  # Trap signals to cleanup child processes
+  trap 'cleanup_processes' EXIT TERM INT
+  
+  cleanup_processes() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] Shutting down..." >> "$LOG_DIR/daemon.log"
+    [[ -f "$LOG_DIR/.convex.pid" ]] && kill $(cat "$LOG_DIR/.convex.pid") 2>/dev/null || true
+    [[ -f "$LOG_DIR/.web.pid" ]] && kill $(cat "$LOG_DIR/.web.pid") 2>/dev/null || true
+    [[ -f "$LOG_DIR/.listen.pid" ]] && kill $(cat "$LOG_DIR/.listen.pid") 2>/dev/null || true
+  }
 
-  # Main listening loop with auto-restart
+  # TODO: Convex dev server (requires cloud setup or local auth workaround)
+  # (
+  #   cd "$CONVEX_DIR"
+  #   npx convex dev >> "$LOG_DIR/convex.log" 2>&1
+  # ) &
+  # echo $! > "$LOG_DIR/.convex.pid"
+
+  # TODO: Web server (TanStack Start dev)
+  # (
+  #   cd "$CONVEX_DIR"
+  #   bun run dev >> "$LOG_DIR/web.log" 2>&1
+  # ) &
+  # echo $! > "$LOG_DIR/.web.pid"
+
+  # Start listening loop with auto-restart
   (
     while true; do
       echo "[$(date +'%Y-%m-%d %H:%M:%S')] Starting listening loop..." >> "$LOG_DIR/daemon.log"
@@ -81,17 +98,13 @@ start_daemon() {
         sleep 5
       fi
     done
-  ) >> "$LOG_DIR/daemon.log" 2>&1 &
-
-  DAEMON_PID=$!
-  echo $DAEMON_PID > "$PID_FILE"
-
-  # Also start web server (TanStack Start dev)
-  (
-    cd "$CONVEX_DIR"
-    bun run dev >> "$LOG_DIR/web.log" 2>&1 &
-    echo $! > "$LOG_DIR/.web.pid"
   ) &
+  LISTEN_PID=$!
+  echo $LISTEN_PID > "$LOG_DIR/.listen.pid"
+  echo "[$(date +'%Y-%m-%d %H:%M:%S')] Listening loop started (PID: $LISTEN_PID)" >> "$LOG_DIR/daemon.log"
+
+  DAEMON_PID=$LISTEN_PID
+  echo $DAEMON_PID > "$PID_FILE"
 
   echo -e "${GREEN}✓ resendld started (PID: $DAEMON_PID)${NC}"
   echo "  Daemon logs: $LOG_DIR/daemon.log"
