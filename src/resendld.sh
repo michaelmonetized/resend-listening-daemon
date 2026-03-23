@@ -5,12 +5,19 @@
 
 set -euo pipefail
 
-# Source shell configuration to get RESEND_API_KEY and other env vars
-[[ -f "$HOME/.zshrc" ]] && source "$HOME/.zshrc" || true
-[[ -f "$HOME/.bashrc" ]] && source "$HOME/.bashrc" || true
-
 # Ensure bun and resend CLI are in PATH (for multi-machine compatibility)
 export PATH="$HOME/.bun/bin:$PATH"
+
+# Get RESEND_API_KEY from environment (set in parent shell or ~/.zshrc)
+# If not set, try to get it from grep in ~/.zshrc
+if [[ -z "${RESEND_API_KEY:-}" ]] && [[ -f "$HOME/.zshrc" ]]; then
+  RESEND_API_KEY_LINE=$(grep "^export RESEND_API_KEY=" "$HOME/.zshrc" | head -1 || true)
+  if [[ -n "$RESEND_API_KEY_LINE" ]]; then
+    eval "$RESEND_API_KEY_LINE"
+  fi
+fi
+
+export RESEND_API_KEY="${RESEND_API_KEY:-}"
 
 # Configuration
 INSTALL_PREFIX="${INSTALL_PREFIX:-$HOME/.local/bin/resendld}"
