@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # Ensure bun and resend CLI are in PATH (for multi-machine compatibility)
-export PATH="/home/michael/.bun/bin:/root/.bun/bin:/Users/michael/.bun/bin:$PATH"
+export PATH="$HOME/.bun/bin:$PATH"
 
 # Configuration
 INSTALL_PREFIX="${INSTALL_PREFIX:-$HOME/.local/bin/resendld}"
