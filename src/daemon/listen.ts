@@ -14,6 +14,7 @@ import * as path from "path";
 import { deliverToGateway } from "./gateway";
 import { storeMessage } from "./storage";
 import { storeInConvex } from "./convex";
+import { parseInstructions, executeInstruction, formatResult } from "./executor";
 
 // Configuration
 const CONFIG_DIR = path.join(process.env.XDG_CONFIG_HOME || `${process.env.HOME}/.config`, "resendld");
@@ -127,6 +128,33 @@ async function startListening() {
             await storeInConvex(parsedEmail);
           } catch (err) {
             // Convex errors are non-fatal
+          }
+
+          // Parse and execute instructions from email body
+          try {
+            const instructions = parseInstructions(parsedEmail.body);
+            if (instructions.length > 0) {
+              console.log(`[C4] Found ${instructions.length} instruction(s) in email`);
+              for (const instruction of instructions) {
+                try {
+                  console.log(`[C4] Executing: ${instruction.command}${instruction.project ? ` ${instruction.project}` : ""}`);
+                  const result = await executeInstruction(instruction, parsedEmail.from);
+                  console.log(`[C4] ${formatResult(result)}`);
+
+                  // Report execution result to Telegram
+                  const resultMessage = `📧 Executed: ${instruction.command}\n${formatResult(result)}`;
+                  execSync(
+                    `/Users/michael/.bun/bin/openclaw message send --channel telegram --target -1003740074376 --message ${JSON.stringify(resultMessage)}`,
+                    { stdio: "pipe", timeout: 5000 }
+                  );
+                } catch (execErr) {
+                  console.error(`[C4] Execution error:`, execErr);
+                }
+              }
+            }
+          } catch (err) {
+            // Instruction parsing errors are non-fatal
+            console.error(`[C4] Instruction parsing error:`, err);
           }
 
           // Deliver to gateway
