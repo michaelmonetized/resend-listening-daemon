@@ -196,3 +196,12 @@ startListening().catch((err) => {
 
 // Keep process alive forever
 setInterval(() => {}, 1000);
+
+// Catch any uncaught errors
+process.on('uncaughtException', (err) => {
+  console.error('[C1] UNCAUGHT EXCEPTION:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[C1] UNHANDLED REJECTION:', reason);
+});
