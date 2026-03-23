@@ -85,14 +85,14 @@ start_daemon() {
 
   # Start listening loop with auto-restart
   (
-    # Export RESEND_API_KEY to subprocess if available
+    # Ensure RESEND_API_KEY is exported
     [[ -z "${RESEND_API_KEY:-}" ]] && echo "[$(date +'%Y-%m-%d %H:%M:%S')] WARNING: RESEND_API_KEY not set" >> "$LOG_DIR/daemon.log"
+    export RESEND_API_KEY="${RESEND_API_KEY:-}"
     
     while true; do
       echo "[$(date +'%Y-%m-%d %H:%M:%S')] Starting listening loop..." >> "$LOG_DIR/daemon.log"
       
-      # Run the TypeScript listening handler with proper env
-      export RESEND_API_KEY="${RESEND_API_KEY:-}"
+      # Run the TypeScript listening handler with RESEND_API_KEY in environment
       if command -v bun &> /dev/null; then
         bun "$INSTALL_PREFIX/src/daemon/listen.ts" >> "$LOG_DIR/daemon.log" 2>&1
       else
