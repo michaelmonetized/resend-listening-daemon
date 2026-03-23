@@ -1,6 +1,6 @@
 {
   "name": "resend-listening-daemon",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Email listening daemon for OpenClaw via Resend API",
   "main": "src/daemon/listen.ts",
   "scripts": {
