@@ -105,23 +105,15 @@ async function startListening() {
         console.log(`[C1] New email: ${email.from} → ${recipients.join(", ")} - ${email.subject}`);
 
         try {
-          const fullOutput = execSync(`resend emails receiving get ${email.id} --json`, {
-            env: {
-              ...process.env,
-              PATH: `${process.env.HOME}/.bun/bin:${process.env.PATH}`,
-            },
-            encoding: "utf-8",
-          });
-          const fullEmail = JSON.parse(fullOutput);
-
+          // Use the email data we already have from the list endpoint
           const parsedEmail = {
-            from: fullEmail.from || "unknown",
-            to: Array.isArray(fullEmail.to) ? fullEmail.to : [fullEmail.to],
-            cc: fullEmail.cc && Array.isArray(fullEmail.cc) ? fullEmail.cc : [],
-            bcc: fullEmail.bcc && Array.isArray(fullEmail.bcc) ? fullEmail.bcc : [],
-            subject: (fullEmail.subject || "no subject").toString(),
-            body: (fullEmail.text || "").toString(),
-            bodyHtml: fullEmail.html ? fullEmail.html.toString() : null,
+            from: email.from || "unknown",
+            to: Array.isArray(email.to) ? email.to : [email.to],
+            cc: email.cc && Array.isArray(email.cc) ? email.cc : [],
+            bcc: email.bcc && Array.isArray(email.bcc) ? email.bcc : [],
+            subject: (email.subject || "no subject").toString(),
+            body: (email.text || "").toString(),
+            bodyHtml: email.html ? email.html.toString() : null,
             attachments: fullEmail.attachments || [],
             date: (fullEmail.created_at || new Date().toISOString()).toString(),
             messageId: fullEmail.id || "unknown",
