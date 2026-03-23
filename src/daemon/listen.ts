@@ -71,7 +71,12 @@ async function startListening() {
   // Poll every 5 seconds
   setInterval(async () => {
     try {
-      const output = execSync("resend emails receiving list --json", {
+      // Find resend CLI (cross-machine compatibility)
+      const resendBin = process.env.RESEND_BIN || 
+        (/^\/home\//.test(process.env.HOME || "") ? "/home/michael/.bun/bin/resend" : "/Users/michael/.bun/bin/resend") ||
+        "resend";
+      
+      const output = execSync(`${resendBin} emails receiving list --json`, {
         encoding: "utf-8",
       });
       const response = JSON.parse(output);
@@ -98,7 +103,7 @@ async function startListening() {
         console.log(`[C1] New email: ${email.from} → ${recipients.join(", ")} - ${email.subject}`);
 
         try {
-          const fullOutput = execSync(`resend emails receiving get ${email.id} --json`, {
+          const fullOutput = execSync(`${resendBin} emails receiving get ${email.id} --json`, {
             encoding: "utf-8",
           });
           const fullEmail = JSON.parse(fullOutput);
