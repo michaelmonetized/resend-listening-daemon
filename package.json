@@ -1,0 +1,22 @@
+{
+  "name": "resend-listening-daemon",
+  "version": "1.0.0",
+  "description": "Email listening daemon for OpenClaw via Resend API",
+  "main": "src/daemon/listen.ts",
+  "scripts": {
+    "dev": "bun src/daemon/listen.ts",
+    "build": "bun build src/daemon/listen.ts --target bun --outfile listen.js",
+    "start": "~/.local/bin/resendld/resendld start",
+    "test": "echo 'No tests yet'"
+  },
+  "keywords": [
+    "email",
+    "resend",
+    "openclaw",
+    "daemon",
+    "automation"
+  ],
+  "author": "Rusty P. Shackelford",
+  "license": "MIT",
+  "dependencies": {}
+}
