@@ -71,10 +71,13 @@ async function startListening() {
   // Poll every 5 seconds
   setInterval(async () => {
     try {
-      // Find resend CLI (cross-machine compatibility)
-      const resendBin = process.env.RESEND_BIN || 
-        (/^\/home\//.test(process.env.HOME || "") ? "/home/michael/.bun/bin/resend" : "/Users/michael/.bun/bin/resend") ||
-        "resend";
+      // Find resend CLI path (multi-machine support)
+      const resendBin = (() => {
+        if (process.env.RESEND_BIN) return process.env.RESEND_BIN;
+        const homeDir = process.env.HOME || "";
+        if (homeDir.includes("/home/")) return "/home/michael/.bun/bin/resend";
+        return "/Users/michael/.bun/bin/resend";
+      })();
       
       const output = execSync(`${resendBin} emails receiving list --json`, {
         encoding: "utf-8",
