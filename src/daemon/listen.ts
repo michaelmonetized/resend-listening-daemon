@@ -72,9 +72,9 @@ async function startListening() {
   setInterval(async () => {
     try {
       console.log(`[C1] Polling... (timestamp: ${new Date().toISOString()})`);
-      // Use resend CLI with explicit PATH setup via sh
-      // For better cross-machine compatibility, use sh -c to ensure PATH is set
-      const output = execSync(`sh -c 'export PATH="$HOME/.bun/bin:$PATH" && resend emails receiving list --json'`, {
+      // Use resend CLI with explicit PATH and API key setup via sh
+      // Pass RESEND_API_KEY explicitly to ensure it's available in subprocess
+      const output = execSync(`sh -c 'export PATH="$HOME/.bun/bin:$PATH" RESEND_API_KEY="${process.env.RESEND_API_KEY || ''}" && resend emails receiving list --json'`, {
         env: process.env,
         encoding: "utf-8",
       });
