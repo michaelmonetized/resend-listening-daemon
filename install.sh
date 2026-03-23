@@ -10,21 +10,24 @@ mkdir -p ~/.local/bin/resendld/src/daemon
 mkdir -p ~/.config/resendld
 mkdir -p ~/.openclaw/workspace/mail/inbox
 
-# Copy daemon files
-cp -r src/daemon/* ~/.local/bin/resendld/src/daemon/
-cp src/resendld.sh ~/.local/bin/resendld/resendld
-chmod +x ~/.local/bin/resendld/resendld
+# Copy all project files
+cp -r . ~/.local/bin/resendld/
+cd ~/.local/bin/resendld
+chmod +x resendld
 
 # Install dependencies
-cd ~/.local/bin/resendld
 if command -v bun &> /dev/null; then
+  echo "Installing with bun..."
   bun install
-else
+  bun build src/daemon/listen.ts --target bun --outfile listen.js
+elif command -v npm &> /dev/null; then
+  echo "Installing with npm..."
   npm install
+  npx esbuild src/daemon/listen.ts --bundle --platform=node --outfile=listen.js
+else
+  echo "❌ Neither bun nor npm found. Please install one."
+  exit 1
 fi
-
-# Build
-bun build src/daemon/listen.ts --target bun --outfile listen.js 2>/dev/null || node_modules/.bin/esbuild src/daemon/listen.ts --bundle --platform=node --outfile=listen.js
 
 # Create default config if not exists
 if [[ ! -f ~/.config/resendld/boxes.json ]]; then
