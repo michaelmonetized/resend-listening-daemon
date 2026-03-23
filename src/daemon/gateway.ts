@@ -45,6 +45,23 @@ export async function deliverToGateway(email: ParsedEmail): Promise<void> {
     } catch (telegramErr: any) {
       console.error(`[C2] Telegram failed:`, telegramErr.message);
     }
+
+    // If this is a status/issue report, acknowledge receipt
+    if (
+      email.subject.toLowerCase().includes("issue") ||
+      email.subject.toLowerCase().includes("bug") ||
+      email.subject.toLowerCase().includes("status")
+    ) {
+      try {
+        const ackMsg = `🔧 Issue acknowledged: "${email.subject}" (${email.messageId}). Rusty will investigate.`;
+        execSync(
+          `/Users/michael/.bun/bin/openclaw message send --channel telegram --target ${TELEGRAM_GROUP} --message ${JSON.stringify(ackMsg)}`,
+          { stdio: "pipe", timeout: 5000 }
+        );
+      } catch (err) {
+        // Non-fatal
+      }
+    }
   } catch (err: any) {
     console.error(`[C2] Error formatting message:`, err);
   }
