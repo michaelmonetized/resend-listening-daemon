@@ -183,7 +183,9 @@ async function startListening() {
       saveSeenIds(seenIds);
     } catch (err: any) {
       if (!err.message?.includes("ECONNREFUSED")) {
-        console.error(`[C1] Error polling:`, err.message);
+        console.error(`[C1] Error polling:`, err.message || String(err));
+        if (err.stderr) console.error(`[C1] stderr:`, err.stderr.toString());
+        if (err.stdout) console.error(`[C1] stdout:`, err.stdout.toString());
       }
     }
   }, POLL_INTERVAL);
