@@ -130,25 +130,34 @@ async function startListening() {
             // Convex errors are non-fatal
           }
 
-          // Parse and execute instructions from email body
+          // Parse and relay instructions to main OpenClaw session
           try {
             const instructions = parseInstructions(parsedEmail.body);
             if (instructions.length > 0) {
               console.log(`[C4] Found ${instructions.length} instruction(s) in email`);
               for (const instruction of instructions) {
                 try {
-                  console.log(`[C4] Executing: ${instruction.command}${instruction.project ? ` ${instruction.project}` : ""}`);
-                  const result = await executeInstruction(instruction, parsedEmail.from);
-                  console.log(`[C4] ${formatResult(result)}`);
-
-                  // Report execution result to Telegram
-                  const resultMessage = `📧 Executed: ${instruction.command}\n${formatResult(result)}`;
+                  // Fire systemEvent to main session via OpenClaw cron API
+                  const CURRENT_EPOCH = Math.floor(Date.now() / 1000);
+                  const FIRE_EPOCH = CURRENT_EPOCH + 10;
+                  const FIRE_TIME = new Date(FIRE_EPOCH * 1000).toISOString();
+                  
+                  const prompt = `Email instruction from ${parsedEmail.from}:\n\n${instruction.command}${instruction.project ? ` ${instruction.project}` : ""}\n\nSubject: ${parsedEmail.subject}`;
+                  
                   execSync(
-                    `/Users/michael/.bun/bin/openclaw message send --channel telegram --target -1003740074376 --message ${JSON.stringify(resultMessage)}`,
+                    `openclaw cron add --name "email-${parsedEmail.messageId.slice(0, 8)}" --at "${FIRE_TIME}" --system-event ${JSON.stringify(prompt)} --session main --delete-after-run 2>&1`,
+                    { stdio: "pipe", timeout: 10000 }
+                  );
+                  console.log(`[C4] ✓ Relayed to main session: ${instruction.command}`);
+
+                  // Also report to Telegram
+                  const telegramMsg = `📧 Instruction from ${parsedEmail.from}:\n${instruction.command}${instruction.project ? ` ${instruction.project}` : ""}`;
+                  execSync(
+                    `/Users/michael/.bun/bin/openclaw message send --channel telegram --target -1003740074376 --message ${JSON.stringify(telegramMsg)}`,
                     { stdio: "pipe", timeout: 5000 }
                   );
-                } catch (execErr) {
-                  console.error(`[C4] Execution error:`, execErr);
+                } catch (execErr: any) {
+                  console.error(`[C4] Relay error:`, execErr.message || execErr);
                 }
               }
             }
