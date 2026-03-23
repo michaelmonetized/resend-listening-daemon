@@ -5,6 +5,10 @@
 
 set -euo pipefail
 
+# Source shell configuration to get RESEND_API_KEY and other env vars
+[[ -f "$HOME/.zshrc" ]] && source "$HOME/.zshrc" || true
+[[ -f "$HOME/.bashrc" ]] && source "$HOME/.bashrc" || true
+
 # Ensure bun and resend CLI are in PATH (for multi-machine compatibility)
 export PATH="$HOME/.bun/bin:$PATH"
 
