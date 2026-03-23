@@ -13,7 +13,9 @@ mkdir -p ~/.openclaw/workspace/mail/inbox
 # Copy all project files
 cp -r . ~/.local/bin/resendld/
 cd ~/.local/bin/resendld
-chmod +x resendld
+chmod +x src/resendld.sh
+# Create symlink if needed
+[[ -f src/resendld.sh ]] && ln -sf src/resendld.sh resendld || true
 
 # Install dependencies
 if command -v bun &> /dev/null; then
