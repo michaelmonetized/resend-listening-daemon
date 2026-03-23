@@ -57,6 +57,47 @@ function loadBoxes(): string[] {
   }
 }
 
+// Load API key from credentials file or environment
+function getApiKey(): string {
+  // Try environment first
+  if (process.env.RESEND_API_KEY) {
+    return process.env.RESEND_API_KEY;
+  }
+
+  // Try credentials file
+  try {
+    const credPath = path.join(process.env.HOME || "", ".config/resend/credentials.json");
+    if (fs.existsSync(credPath)) {
+      const creds = JSON.parse(fs.readFileSync(credPath, "utf-8"));
+      // Handle both old format (teams.default.api_key) and new format
+      if (creds.teams?.default?.api_key) {
+        return creds.teams.default.api_key;
+      }
+    }
+  } catch (err) {
+    // Silently fail, will error at polling time
+  }
+
+  return "";
+}
+
+// Get resend binary path
+function getResendPath(): string {
+  const homeDir = process.env.HOME || "";
+  const bunResendPath = path.join(homeDir, ".bun/bin/resend");
+  
+  try {
+    if (fs.existsSync(bunResendPath)) {
+      return bunResendPath;
+    }
+  } catch (err) {
+    // Ignore
+  }
+  
+  // Fall back to system resend
+  return "resend";
+}
+
 async function startListening() {
   const boxes = loadBoxes();
   if (boxes.length === 0) {
@@ -64,28 +105,33 @@ async function startListening() {
     return;
   }
 
+  // Validate API key early
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    console.error(`[C1] FATAL: RESEND_API_KEY not found in environment or ~/.config/resend/credentials.json`);
+    return;
+  }
+
+  const resendPath = getResendPath();
+
   let seenIds = loadSeenIds();
   console.log(`[C1] Loaded ${seenIds.size} seen message IDs`);
   console.log(`[C1] Listening to: ${boxes.join(", ")}`);
+  console.log(`[C1] Using resend: ${resendPath}`);
 
   // Poll every 5 seconds
   setInterval(async () => {
     try {
       console.log(`[C1] Polling... (timestamp: ${new Date().toISOString()})`);
-      // Use resend CLI directly with full PATH
-      // Try: (1) ~/.bun/bin/resend (2) system resend (3) give up with error
-      let resendPath = "resend";
-      const bunResendPath = `${process.env.HOME}/.bun/bin/resend`;
-      try {
-        // Check if bun version exists
-        const fs = require("fs");
-        if (fs.existsSync(bunResendPath)) {
-          resendPath = bunResendPath;
-        }
-      } catch (e) {}
       
+      // Execute resend CLI with explicit API key in environment
+      const env = {
+        ...process.env,
+        RESEND_API_KEY: apiKey,
+      };
+
       const output = execSync(`${resendPath} emails receiving list --json`, {
-        env: process.env,
+        env,
         encoding: "utf-8",
       });
       const response = JSON.parse(output);
