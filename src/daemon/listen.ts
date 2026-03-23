@@ -116,8 +116,8 @@ async function startListening() {
             body: (email.text || "").toString(),
             bodyHtml: email.html ? email.html.toString() : null,
             attachments: email.attachments || [],
-            date: (fullEmail.created_at || new Date().toISOString()).toString(),
-            messageId: fullEmail.id || "unknown",
+            date: (email.created_at || new Date().toISOString()).toString(),
+            messageId: email.id || "unknown",
           };
 
           // Store locally
