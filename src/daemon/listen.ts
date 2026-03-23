@@ -1,14 +1,13 @@
 #!/usr/bin/env bun
 
 /**
- * C1: Resend Listening Loop (Using resend-cli list)
+ * C1: Resend Listening Loop (Direct API calls, no CLI)
  *
- * Polls resend emails receiving list --json every 5 seconds
+ * Polls Resend API directly every 5 seconds using fetch
  * Filters by recipient box
  * Tracks seen IDs to avoid re-processing
  */
 
-import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { deliverToGateway } from "./gateway";
@@ -72,13 +71,27 @@ async function startListening() {
   setInterval(async () => {
     try {
       console.log(`[C1] Polling... (timestamp: ${new Date().toISOString()})`);
-      // Use resend CLI with explicit PATH and API key setup via sh
-      // Pass RESEND_API_KEY explicitly to ensure it's available in subprocess
-      const output = execSync(`sh -c 'export PATH="$HOME/.bun/bin:$PATH" RESEND_API_KEY="${process.env.RESEND_API_KEY || ''}" && resend emails receiving list --json'`, {
-        env: process.env,
-        encoding: "utf-8",
+      
+      // Use Resend API directly (no CLI dependency)
+      const apiKey = process.env.RESEND_API_KEY;
+      if (!apiKey) {
+        console.error(`[C1] Error: RESEND_API_KEY not set`);
+        return;
+      }
+      
+      const res = await fetch("https://api.resend.com/emails/receiving/list", {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
       });
-      const response = JSON.parse(output);
+      
+      if (!res.ok) {
+        const error = await res.text();
+        console.error(`[C1] Error polling API (${res.status}):`, error);
+        return;
+      }
+      
+      const response = await res.json();
       const emails = response.data || [];
 
       for (const email of emails) {
