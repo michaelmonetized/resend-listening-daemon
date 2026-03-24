@@ -1,27 +1,26 @@
 #!/usr/bin/env bun
 
 /**
- * C1: Resend Listening Loop (Using resend-cli list)
+ * C1: Resend Listening Loop (Pure fetch — zero CLI dependencies)
  *
- * Polls resend emails receiving list --json every 5 seconds
- * Filters by recipient box
- * Tracks seen IDs to avoid re-processing
+ * Polls Resend API directly every 5 seconds via fetch()
+ * Fetches full email body per message
+ * Dispatches to OpenClaw /hooks/agent as direct tasks
+ * Falls back to cron systemEvent if hooks unavailable
  */
 
-import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import { deliverToGateway } from "./gateway";
 import { storeMessage } from "./storage";
 import { storeInConvex } from "./convex";
-import { parseInstructions, executeInstruction, formatResult } from "./executor";
 
 // Configuration
 const CONFIG_DIR = path.join(process.env.XDG_CONFIG_HOME || `${process.env.HOME}/.config`, "resendld");
 const BOXES_FILE = path.join(CONFIG_DIR, "boxes.json");
-const STATE_DIR = path.join(process.env.HOME, ".local/bin/resendld/state");
+const STATE_DIR = path.join(process.env.HOME || "", ".local/bin/resendld/state");
 const SEEN_IDS_FILE = path.join(STATE_DIR, "seen-ids.json");
 const POLL_INTERVAL = 5000; // 5 seconds
+const RESEND_API = "https://api.resend.com";
 
 // Ensure state directory
 if (!fs.existsSync(STATE_DIR)) {
@@ -57,45 +56,116 @@ function loadBoxes(): string[] {
   }
 }
 
-// Load API key from credentials file or environment
+// Load API key from environment or credentials file
 function getApiKey(): string {
-  // Try environment first
-  if (process.env.RESEND_API_KEY) {
-    return process.env.RESEND_API_KEY;
-  }
+  if (process.env.RESEND_API_KEY) return process.env.RESEND_API_KEY;
 
-  // Try credentials file
   try {
     const credPath = path.join(process.env.HOME || "", ".config/resend/credentials.json");
     if (fs.existsSync(credPath)) {
       const creds = JSON.parse(fs.readFileSync(credPath, "utf-8"));
-      // Handle both old format (teams.default.api_key) and new format
-      if (creds.teams?.default?.api_key) {
-        return creds.teams.default.api_key;
-      }
+      if (creds.teams?.default?.api_key) return creds.teams.default.api_key;
     }
-  } catch (err) {
-    // Silently fail, will error at polling time
-  }
+  } catch (err) {}
 
   return "";
 }
 
-// Get resend binary path
-function getResendPath(): string {
-  const homeDir = process.env.HOME || "";
-  const bunResendPath = path.join(homeDir, ".bun/bin/resend");
-  
+// List received emails via Resend API
+async function listEmails(apiKey: string): Promise<any[]> {
+  const res = await fetch(`${RESEND_API}/emails/receiving`, {
+    headers: { "Authorization": `Bearer ${apiKey}` },
+  });
+  if (!res.ok) throw new Error(`Resend API ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  return (data as any).data || [];
+}
+
+// Fetch full email content (body, html, headers)
+async function fetchEmail(apiKey: string, emailId: string): Promise<any> {
+  const res = await fetch(`${RESEND_API}/emails/receiving/${emailId}`, {
+    headers: { "Authorization": `Bearer ${apiKey}` },
+  });
+  if (!res.ok) throw new Error(`Resend API ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+// Dispatch email as agent task via /hooks/agent
+async function dispatchToAgent(parsedEmail: any): Promise<boolean> {
+  const gatewayUrl = process.env.OPENCLAW_GATEWAY_URL || "https://localhost:18789";
+  const hooksToken = process.env.OPENCLAW_HOOKS_TOKEN || "";
+
+  const prompt = [
+    `You received an email. Execute the instructions in it.`,
+    ``,
+    `From: ${parsedEmail.from}`,
+    `To: ${parsedEmail.to.join(", ")}`,
+    `Subject: ${parsedEmail.subject}`,
+    `Date: ${parsedEmail.date}`,
+    ``,
+    parsedEmail.body,
+  ].join("\n");
+
+  const hookPayload = {
+    message: prompt,
+    name: `Email from ${parsedEmail.from}`,
+    wakeMode: "now",
+    deliver: false,
+  };
+
   try {
-    if (fs.existsSync(bunResendPath)) {
-      return bunResendPath;
+    // @ts-ignore - bun supports tls options in fetch
+    const res = await fetch(`${gatewayUrl}/hooks/agent`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${hooksToken}`,
+      },
+      body: JSON.stringify(hookPayload),
+      tls: { rejectUnauthorized: false },
+    });
+
+    if (res.ok) {
+      console.log(`[C4] ✓ Dispatched as agent task: ${parsedEmail.subject}`);
+      return true;
     }
-  } catch (err) {
-    // Ignore
+
+    const errText = await res.text();
+    console.error(`[C4] Hook failed (${res.status}): ${errText}`);
+
+    // Fallback to cron systemEvent if hooks not available
+    if (res.status === 404 || res.status === 401) {
+      return await fallbackToCron(parsedEmail);
+    }
+  } catch (err: any) {
+    console.error(`[C4] Delivery error:`, err.message || err);
   }
-  
-  // Fall back to system resend
-  return "resend";
+
+  return false;
+}
+
+// Fallback: fire cron systemEvent via openclaw CLI
+async function fallbackToCron(parsedEmail: any): Promise<boolean> {
+  try {
+    console.log(`[C4] Falling back to cron systemEvent...`);
+    const FIRE_TIME = new Date(Date.now() + 10000).toISOString();
+    const prompt = `📧 ${parsedEmail.subject}\n\nFrom: ${parsedEmail.from}\n\n${parsedEmail.body}`;
+
+    const child = Bun.spawn(["openclaw", "cron", "add",
+      "--name", `email-${parsedEmail.messageId.slice(0, 8)}`,
+      "--at", FIRE_TIME,
+      "--system-event", prompt,
+      "--session", "main",
+      "--delete-after-run"
+    ], { stdio: ["ignore", "ignore", "ignore"] });
+
+    child.unref();
+    console.log(`[C4] ✓ Fallback queued: ${parsedEmail.subject}`);
+    return true;
+  } catch (err: any) {
+    console.error(`[C4] Fallback failed:`, err.message || err);
+    return false;
+  }
 }
 
 async function startListening() {
@@ -105,160 +175,64 @@ async function startListening() {
     return;
   }
 
-  // Validate API key early
   const apiKey = getApiKey();
   if (!apiKey) {
-    console.error(`[C1] FATAL: RESEND_API_KEY not found in environment or ~/.config/resend/credentials.json`);
+    console.error(`[C1] FATAL: RESEND_API_KEY not found`);
     return;
   }
-
-  const resendPath = getResendPath();
 
   let seenIds = loadSeenIds();
   console.log(`[C1] Loaded ${seenIds.size} seen message IDs`);
   console.log(`[C1] Listening to: ${boxes.join(", ")}`);
-  console.log(`[C1] Using resend: ${resendPath}`);
+  console.log(`[C1] Mode: Pure fetch (zero CLI dependencies)`);
 
-  // Poll every 5 seconds
+  // Poll loop
   setInterval(async () => {
     try {
       console.log(`[C1] Polling... (timestamp: ${new Date().toISOString()})`);
-      
-      // Execute resend CLI with explicit API key in environment
-      const env = {
-        ...process.env,
-        RESEND_API_KEY: apiKey,
-      };
 
-      const output = execSync(`${resendPath} emails receiving list --json`, {
-        env,
-        encoding: "utf-8",
-      });
-      const response = JSON.parse(output);
-      const emails = response.data || [];
+      const emails = await listEmails(apiKey);
 
       for (const email of emails) {
-        // Skip if already seen
-        if (seenIds.has(email.id)) {
-          continue;
-        }
+        if (seenIds.has(email.id)) continue;
 
         // Filter by recipient box
         const recipients = Array.isArray(email.to) ? email.to : [email.to];
         const isRelevant = recipients.some((r: string) =>
           boxes.some((b) => r.toLowerCase() === b.toLowerCase())
         );
-
-        if (!isRelevant) {
-          continue;
-        }
+        if (!isRelevant) continue;
 
         seenIds.add(email.id);
-
         console.log(`[C1] New email: ${email.from} → ${recipients.join(", ")} - ${email.subject}`);
 
         try {
-          // Fetch full email content (list endpoint doesn't include body)
-          let fullEmail = email;
-          try {
-            const detailRes = await fetch(`https://api.resend.com/emails/receiving/${email.id}`, {
-              headers: { "Authorization": `Bearer ${apiKey}` },
-            });
-            if (detailRes.ok) {
-              fullEmail = await detailRes.json();
-              console.log(`[C1] Fetched full email body (${(fullEmail.text || "").length} chars)`);
-            }
-          } catch (fetchErr) {
-            console.error(`[C1] Failed to fetch email details, using list data`);
-          }
+          // Fetch full email content (list endpoint has no body)
+          const fullEmail = await fetchEmail(apiKey, email.id);
+          console.log(`[C1] Body: ${(fullEmail.text || "").length} chars`);
 
           const parsedEmail = {
             from: fullEmail.from || "unknown",
             to: Array.isArray(fullEmail.to) ? fullEmail.to : [fullEmail.to],
-            cc: fullEmail.cc && Array.isArray(fullEmail.cc) ? fullEmail.cc : [],
-            bcc: fullEmail.bcc && Array.isArray(fullEmail.bcc) ? fullEmail.bcc : [],
+            cc: fullEmail.cc || [],
+            bcc: fullEmail.bcc || [],
             subject: (fullEmail.subject || "no subject").toString(),
             body: (fullEmail.text || "").toString(),
-            bodyHtml: fullEmail.html ? fullEmail.html.toString() : null,
+            bodyHtml: fullEmail.html || null,
             attachments: fullEmail.attachments || [],
             date: (fullEmail.created_at || new Date().toISOString()).toString(),
             messageId: fullEmail.id || "unknown",
           };
 
-          // Store locally
-          try {
-            await storeMessage(parsedEmail);
-          } catch (err) {
-            console.error(`[CC1] Failed to store:`, err);
-          }
+          // Store locally (non-blocking)
+          storeMessage(parsedEmail).catch((err) => console.error(`[CC1] Store failed:`, err));
 
-          // Store in Convex
-          try {
-            await storeInConvex(parsedEmail);
-          } catch (err) {
-            // Convex errors are non-fatal
-          }
+          // Store in Convex (non-blocking)
+          storeInConvex(parsedEmail).catch(() => {});
 
-          // Deliver email as a DIRECT AGENT TASK via /hooks/agent
-          // This makes the agent treat it as a user prompt to execute, not a notification to relay
-          try {
-            const gatewayUrl = process.env.OPENCLAW_GATEWAY_URL || "https://localhost:18789";
-            const hooksToken = process.env.OPENCLAW_HOOKS_TOKEN || "";
-            
-            const prompt = `You received an email. Execute the instructions in it.\n\nFrom: ${parsedEmail.from}\nTo: ${parsedEmail.to.join(", ")}\nSubject: ${parsedEmail.subject}\nDate: ${parsedEmail.date}\n\n${parsedEmail.body}`;
-            
-            const hookPayload = {
-              message: prompt,
-              name: `Email from ${parsedEmail.from}`,
-              wakeMode: "now",
-              deliver: false,  // Don't auto-deliver to chat, let the agent decide
-            };
+          // Dispatch as agent task
+          await dispatchToAgent(parsedEmail);
 
-            // @ts-ignore - bun supports tls options in fetch
-            const response = await fetch(`${gatewayUrl}/hooks/agent`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${hooksToken}`,
-              },
-              body: JSON.stringify(hookPayload),
-              tls: { rejectUnauthorized: false }, // Allow self-signed certs
-            });
-
-            if (response.ok) {
-              console.log(`[C4] ✓ Dispatched as agent task: ${parsedEmail.subject}`);
-            } else {
-              const errText = await response.text();
-              console.error(`[C4] Hook failed (${response.status}): ${errText}`);
-              
-              // Fallback to cron systemEvent if hooks not enabled
-              if (response.status === 404 || response.status === 401) {
-                console.log(`[C4] Falling back to cron systemEvent...`);
-                const FIRE_TIME = new Date(Date.now() + 10000).toISOString();
-                const fallbackPrompt = `📧 ${parsedEmail.subject}\n\nFrom: ${parsedEmail.from}\n\n${parsedEmail.body}`;
-                
-                const child = require("child_process").spawn("openclaw", [
-                  "cron", "add",
-                  "--name", `email-${parsedEmail.messageId.slice(0, 8)}`,
-                  "--at", FIRE_TIME,
-                  "--system-event", fallbackPrompt,
-                  "--session", "main",
-                  "--delete-after-run"
-                ], { stdio: "ignore" });
-                child.unref();
-                console.log(`[C4] ✓ Fallback queued to main session: ${parsedEmail.subject}`);
-              }
-            }
-          } catch (err: any) {
-            console.error(`[C4] Delivery error:`, err.message || err);
-          }
-
-          // Deliver to gateway
-          try {
-            await deliverToGateway(parsedEmail);
-          } catch (err) {
-            // Gateway errors are non-fatal
-          }
         } catch (err) {
           console.error(`[C1] Error processing email ${email.id}:`, err);
         }
@@ -267,9 +241,7 @@ async function startListening() {
       saveSeenIds(seenIds);
     } catch (err: any) {
       if (!err.message?.includes("ECONNREFUSED")) {
-        console.error(`[C1] Error polling:`, err.message || String(err));
-        if (err.stderr) console.error(`[C1] stderr:`, err.stderr.toString());
-        if (err.stdout) console.error(`[C1] stdout:`, err.stdout.toString());
+        console.error(`[C1] Poll error:`, err.message || String(err));
       }
     }
   }, POLL_INTERVAL);
@@ -280,14 +252,8 @@ startListening().catch((err) => {
   process.exit(1);
 });
 
-// Keep process alive forever
-setInterval(() => {}, 1000);
+// Keep alive
+setInterval(() => {}, 60000);
 
-// Catch any uncaught errors
-process.on('uncaughtException', (err) => {
-  console.error('[C1] UNCAUGHT EXCEPTION:', err);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('[C1] UNHANDLED REJECTION:', reason);
-});
+process.on('uncaughtException', (err) => console.error('[C1] UNCAUGHT:', err));
+process.on('unhandledRejection', (reason) => console.error('[C1] UNHANDLED:', reason));
