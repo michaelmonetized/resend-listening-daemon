@@ -189,7 +189,7 @@ async function startListening() {
           // Deliver email as a DIRECT AGENT TASK via /hooks/agent
           // This makes the agent treat it as a user prompt to execute, not a notification to relay
           try {
-            const gatewayUrl = process.env.OPENCLAW_GATEWAY_URL || "http://localhost:18789";
+            const gatewayUrl = process.env.OPENCLAW_GATEWAY_URL || "https://localhost:18789";
             const hooksToken = process.env.OPENCLAW_HOOKS_TOKEN || "";
             
             const prompt = `You received an email. Execute the instructions in it.\n\nFrom: ${parsedEmail.from}\nTo: ${parsedEmail.to.join(", ")}\nSubject: ${parsedEmail.subject}\nDate: ${parsedEmail.date}\n\n${parsedEmail.body}`;
@@ -201,6 +201,7 @@ async function startListening() {
               deliver: false,  // Don't auto-deliver to chat, let the agent decide
             };
 
+            // @ts-ignore - bun supports tls options in fetch
             const response = await fetch(`${gatewayUrl}/hooks/agent`, {
               method: "POST",
               headers: {
@@ -208,6 +209,7 @@ async function startListening() {
                 "Authorization": `Bearer ${hooksToken}`,
               },
               body: JSON.stringify(hookPayload),
+              tls: { rejectUnauthorized: false }, // Allow self-signed certs
             });
 
             if (response.ok) {
