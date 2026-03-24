@@ -186,37 +186,54 @@ async function startListening() {
             // Convex errors are non-fatal
           }
 
-          // Deliver full email content + subject to main session as direct instructions
-          // Fire in background (non-blocking) so daemon keeps polling
+          // Deliver email as a DIRECT AGENT TASK via /hooks/agent
+          // This makes the agent treat it as a user prompt to execute, not a notification to relay
           try {
-            const CURRENT_EPOCH = Math.floor(Date.now() / 1000);
-            const FIRE_EPOCH = CURRENT_EPOCH + 10;
-            const FIRE_TIME = new Date(FIRE_EPOCH * 1000).toISOString();
+            const gatewayUrl = process.env.OPENCLAW_GATEWAY_URL || "http://localhost:18789";
+            const hooksToken = process.env.OPENCLAW_HOOKS_TOKEN || "";
             
-            const prompt = `📧 ${parsedEmail.subject}\n\nFrom: ${parsedEmail.from}\n\n${parsedEmail.body}`;
+            const prompt = `You received an email. Execute the instructions in it.\n\nFrom: ${parsedEmail.from}\nTo: ${parsedEmail.to.join(", ")}\nSubject: ${parsedEmail.subject}\nDate: ${parsedEmail.date}\n\n${parsedEmail.body}`;
             
-            // Fire cron add in background (don't wait for it)
-            const child = require("child_process").spawn("openclaw", [
-              "cron", "add",
-              "--name", `email-${parsedEmail.messageId.slice(0, 8)}`,
-              "--at", FIRE_TIME,
-              "--system-event", prompt,
-              "--session", "main",
-              "--delete-after-run"
-            ], { stdio: "ignore" });
-            
-            child.unref(); // Let it run independently
-            console.log(`[C4] ✓ Queued to main session: ${parsedEmail.subject}`);
+            const hookPayload = {
+              message: prompt,
+              name: `Email from ${parsedEmail.from}`,
+              wakeMode: "now",
+              deliver: false,  // Don't auto-deliver to chat, let the agent decide
+            };
 
-            // Also report to Telegram (non-blocking)
-            const telegramChild = require("child_process").spawn("openclaw", [
-              "message", "send",
-              "--channel", "telegram",
-              "--target", "-1003740074376",
-              "--message", `📧 ${parsedEmail.subject}\n\nFrom: ${parsedEmail.from}`
-            ], { stdio: "ignore" });
-            
-            telegramChild.unref();
+            const response = await fetch(`${gatewayUrl}/hooks/agent`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${hooksToken}`,
+              },
+              body: JSON.stringify(hookPayload),
+            });
+
+            if (response.ok) {
+              console.log(`[C4] ✓ Dispatched as agent task: ${parsedEmail.subject}`);
+            } else {
+              const errText = await response.text();
+              console.error(`[C4] Hook failed (${response.status}): ${errText}`);
+              
+              // Fallback to cron systemEvent if hooks not enabled
+              if (response.status === 404 || response.status === 401) {
+                console.log(`[C4] Falling back to cron systemEvent...`);
+                const FIRE_TIME = new Date(Date.now() + 10000).toISOString();
+                const fallbackPrompt = `📧 ${parsedEmail.subject}\n\nFrom: ${parsedEmail.from}\n\n${parsedEmail.body}`;
+                
+                const child = require("child_process").spawn("openclaw", [
+                  "cron", "add",
+                  "--name", `email-${parsedEmail.messageId.slice(0, 8)}`,
+                  "--at", FIRE_TIME,
+                  "--system-event", fallbackPrompt,
+                  "--session", "main",
+                  "--delete-after-run"
+                ], { stdio: "ignore" });
+                child.unref();
+                console.log(`[C4] ✓ Fallback queued to main session: ${parsedEmail.subject}`);
+              }
+            }
           } catch (err: any) {
             console.error(`[C4] Delivery error:`, err.message || err);
           }
