@@ -211,13 +211,30 @@ async function startListening() {
           const fullEmail = await fetchEmail(apiKey, email.id);
           console.log(`[C1] Body: ${(fullEmail.text || "").length} chars`);
 
+          // Helper: Strip HTML tags
+          const stripHtml = (html: string) => {
+            if (!html) return "";
+            return html
+              .replace(/<br\s*\/?>/gi, "\n")
+              .replace(/<\/p>/gi, "\n\n")
+              .replace(/<[^>]+>/g, "")
+              .replace(/&nbsp;/g, " ")
+              .replace(/&amp;/g, "&")
+              .replace(/&lt;/g, "<")
+              .replace(/&gt;/g, ">")
+              .replace(/\n\s*\n/g, "\n\n");
+          };
+
+          // Fallback: use HTML if text is empty
+          const emailBody = fullEmail.text || stripHtml(fullEmail.html || "") || "(empty body)";
+
           const parsedEmail = {
             from: fullEmail.from || "unknown",
             to: Array.isArray(fullEmail.to) ? fullEmail.to : [fullEmail.to],
             cc: fullEmail.cc || [],
             bcc: fullEmail.bcc || [],
             subject: (fullEmail.subject || "no subject").toString(),
-            body: (fullEmail.text || "").toString(),
+            body: emailBody.toString(),
             bodyHtml: fullEmail.html || null,
             attachments: fullEmail.attachments || [],
             date: (fullEmail.created_at || new Date().toISOString()).toString(),

@@ -121,12 +121,26 @@ start_daemon() {
   # ) &
   # echo $! > "$LOG_DIR/.convex.pid"
 
-  # TODO: Web server (TanStack Start dev)
-  # (
-  #   cd "$CONVEX_DIR"
-  #   bun run dev >> "$LOG_DIR/web.log" 2>&1
-  # ) &
-  # echo $! > "$LOG_DIR/.web.pid"
+  # Start Convex local deployment
+  (
+    cd "$CONVEX_DIR"
+    npx convex dev >> "$LOG_DIR/convex.log" 2>&1
+  ) &
+  CONVEX_PID=$!
+  echo $CONVEX_PID > "$LOG_DIR/.convex.pid"
+  echo "[$(date +'%Y-%m-%d %H:%M:%S')] Convex dev started (PID: $CONVEX_PID)" >> "$LOG_DIR/daemon.log"
+
+  # Start web server (TanStack Start via Vinxi)
+  (
+    cd "$CONVEX_DIR"
+    # Ensure deps are installed
+    [[ ! -d node_modules ]] && bun install >> "$LOG_DIR/web.log" 2>&1
+    # Start dev server
+    bun run start >> "$LOG_DIR/web.log" 2>&1
+  ) &
+  WEB_PID=$!
+  echo $WEB_PID > "$LOG_DIR/.web.pid"
+  echo "[$(date +'%Y-%m-%d %H:%M:%S')] Web server started (PID: $WEB_PID)" >> "$LOG_DIR/daemon.log"
 
   # Start listening loop with auto-restart
   (
