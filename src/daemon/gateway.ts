@@ -24,6 +24,32 @@ interface ParsedEmail {
 // Telegram group for resendld notifications
 const TELEGRAM_GROUP = "-1003740074376"; // HurleyUS group
 
+// Resolve openclaw binary path (cross-platform)
+function getOpenclawBinary(): string {
+  try {
+    // Try 'which openclaw' first (works on all platforms if in PATH)
+    return execSync("which openclaw", { encoding: "utf-8" }).trim();
+  } catch {
+    // Fallback: try common bun install paths
+    const home = process.env.HOME || process.env.USERPROFILE || "";
+    const bunPaths = [
+      `${home}/.bun/bin/openclaw`,
+      `${home}/.local/bin/openclaw`,
+      "/usr/local/bin/openclaw",
+    ];
+    for (const path of bunPaths) {
+      try {
+        execSync(`test -x ${path}`, { stdio: "pipe" });
+        return path;
+      } catch {
+        // Continue to next path
+      }
+    }
+    // Last resort: assume it's in PATH
+    return "openclaw";
+  }
+}
+
 export async function deliverToGateway(email: ParsedEmail): Promise<void> {
   try {
     const subject = email.subject || "(no subject)";
@@ -33,9 +59,10 @@ export async function deliverToGateway(email: ParsedEmail): Promise<void> {
     // Format message for Telegram
     const message = `📧 New Email\n\nFrom: ${from}\nSubject: ${subject}\n\nPreview: ${preview}`;
 
-    // Send via openclaw message CLI (use full path)
+    // Send via openclaw message CLI (resolved cross-platform)
     try {
-      const cmd = `/Users/michael/.bun/bin/openclaw message send --channel telegram --target ${TELEGRAM_GROUP} --message ${JSON.stringify(message)}`;
+      const openclawBin = getOpenclawBinary();
+      const cmd = `${openclawBin} message send --channel telegram --target ${TELEGRAM_GROUP} --message ${JSON.stringify(message)}`;
       execSync(cmd, {
         stdio: "pipe",
         timeout: 10000,
