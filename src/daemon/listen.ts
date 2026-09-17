@@ -7,12 +7,12 @@
  * Fetches full email body per message
  * Dispatches to OpenClaw /hooks/agent as direct tasks
  * Falls back to cron systemEvent if hooks unavailable
+ * Resend-only listen path: no Convex dual-write on inbound mail
  */
 
 import * as fs from "fs";
 import * as path from "path";
 import { storeMessage } from "./storage";
-import { storeInConvex } from "./convex";
 
 // Configuration
 const CONFIG_DIR = path.join(process.env.XDG_CONFIG_HOME || `${process.env.HOME}/.config`, "resendld");
@@ -243,9 +243,6 @@ async function startListening() {
 
           // Store locally (non-blocking)
           storeMessage(parsedEmail).catch((err) => console.error(`[CC1] Store failed:`, err));
-
-          // Store in Convex (non-blocking)
-          storeInConvex(parsedEmail).catch(() => {});
 
           // Dispatch as agent task
           await dispatchToAgent(parsedEmail);
